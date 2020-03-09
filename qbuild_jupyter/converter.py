@@ -56,8 +56,7 @@ def convert_initial_dir_to_nonquera(initial_dir, nonquera_dir=None, challenge_na
         challenge_name = initial_dir_slices[-1]
 
     if not nonquera_dir:
-        initial_dir_base = '/'.join(initial_dir_slices[:-1])
-        nonquera_dir = f'{initial_dir_base}/{challenge_name}_nonquera'
+        nonquera_dir = '/'.join(initial_dir_slices[:-1])
 
     if not os.path.exists(nonquera_dir):
         os.makedirs(nonquera_dir)
