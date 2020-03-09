@@ -154,6 +154,3 @@ def convert_initial_to_nonquera(path, mode, nonquera_dir=None):
     return nonquera_extract_dir_path, nonquera_extract_zip_path
 
 
-r = convert_initial_zip_to_nonquera('/home/peynaj/Downloads/ex_initial.zip')
-print(r)
-
