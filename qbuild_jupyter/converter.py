@@ -3,6 +3,8 @@ import codecs
 import json
 import os
 import shutil
+import tempfile
+import zipfile
 from copy import deepcopy
 from zipfile import ZipFile
 
@@ -47,16 +49,82 @@ def validate_initial_files(initial_dir_files):
             raise InvalidInitial(f'{required_file} not found in initial.')
 
 
-def convert_initial_dir_to_nonquera(initial_dir, nonquera_dir=None, challenge_name=None):
+def append_dumper_cells_to_quera_solution_json(solution_json, dumper_code_lines):
+    # append dumper markdown
+    solution_json['cells'].append(DUMPER_MARKDOWN_CELL)
+
+    # append dumper code
+    dumper_code_cell = deepcopy(DUMPER_CODE_CELL)
+    dumper_code_cell['source'] = dumper_code_lines
+    solution_json['cells'].append(dumper_code_cell)
+
+    return solution_json
+
+
+def rewrite_solution_file_with_dumper_codes(nonquera_solution_path, nonquera_dumper_path):
+    with open(nonquera_solution_path, 'r') as solution_file:
+        solution_txt = solution_file.read()
+    solution_json = json.loads(solution_txt)
+
+    with open(nonquera_dumper_path, 'r') as dumper_file:
+        dumper_code_lines = dumper_file.readlines()
+
+    solution_json = append_dumper_cells_to_quera_solution_json(solution_json, dumper_code_lines)
+
+    # write solution
+    solution_txt = json.dumps(solution_json, indent=1, ensure_ascii=False)
+
+    with open(nonquera_solution_path, 'w') as solution_file:
+        solution_file.write(solution_txt)
+
+    return
+
+
+def convert_initial_dir_to_nonquera_in_temp_file(initial_dir):
 
     initial_dir_files = os.listdir(initial_dir)
     validate_initial_files(initial_dir_files)
-    initial_dir_slices = initial_dir.split('/')
+
+    # create temp file and archive
+    temp_file = tempfile.TemporaryFile()
+    archive = zipfile.ZipFile(temp_file, 'w', zipfile.ZIP_DEFLATED)
+    for root, dirs, files in os.walk(initial_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            if file == SOLUTION:
+                rewrite_solution_file_with_dumper_codes(
+                    nonquera_solution_path=file_path,
+                    nonquera_dumper_path=os.path.join(initial_dir, DUMPER)
+                )
+
+            if file != DUMPER:
+                archive.write(file_path, os.path.relpath(file_path, initial_dir))
+    archive.close()
+    return temp_file
+
+
+def convert_initial_zip_to_nonquera_in_temp_file(zip_path):
+    extract_tmp_directory = tempfile.TemporaryDirectory()
+    extract_tmp_path = extract_tmp_directory.name
+
+    # extract zip to temporary directory
+    with ZipFile(zip_path, 'r') as zip_obj:
+        zip_obj.extractall(extract_tmp_path)
+
+    temp_file = convert_initial_dir_to_nonquera_in_temp_file(initial_dir=extract_tmp_path)
+    return temp_file
+
+
+def convert_initial_dir_to_nonquera_in_path(initial_dir, nonquera_dir=None, challenge_name=None):
+
+    initial_dir_files = os.listdir(initial_dir)
+    validate_initial_files(initial_dir_files)
+
     if not challenge_name:
-        challenge_name = initial_dir_slices[-1]
+        challenge_name = os.path.basename(initial_dir)
 
     if not nonquera_dir:
-        nonquera_dir = '/'.join(initial_dir_slices[:-1])
+        nonquera_dir = os.path.dirname(initial_dir)
 
     if not os.path.exists(nonquera_dir):
         os.makedirs(nonquera_dir)
@@ -76,25 +144,7 @@ def convert_initial_dir_to_nonquera(initial_dir, nonquera_dir=None, challenge_na
     nonquera_solution_path = f'{nonquera_extract_dir_path}/{SOLUTION}'
     nonquera_dumper_path = f'{nonquera_extract_dir_path}/{DUMPER}'
 
-    with open(nonquera_solution_path, 'r') as solution_file:
-        solution_txt = solution_file.read()
-    solution_json = json.loads(solution_txt)
-
-    # append dumper markdown
-    solution_json['cells'].append(DUMPER_MARKDOWN_CELL)
-
-    # append dumper code
-    with open(nonquera_dumper_path, 'r') as dumper_file:
-        dumper_code_lines = dumper_file.readlines()
-    dumper_code_cell = deepcopy(DUMPER_CODE_CELL)
-    dumper_code_cell['source'] = dumper_code_lines
-    solution_json['cells'].append(dumper_code_cell)
-
-    # write solution
-    solution_txt = json.dumps(solution_json, indent=1, ensure_ascii=False)
-
-    with open(nonquera_solution_path, 'w') as solution_file:
-        solution_file.write(solution_txt)
+    rewrite_solution_file_with_dumper_codes(nonquera_solution_path, nonquera_dumper_path)
 
     # remove nonquera dumper file
     os.remove(nonquera_dumper_path)
@@ -105,12 +155,13 @@ def convert_initial_dir_to_nonquera(initial_dir, nonquera_dir=None, challenge_na
     return nonquera_extract_dir_path, nonquera_extract_zip_path
 
 
-def convert_initial_zip_to_nonquera(zip_path, nonquera_dir=None):
-    zip_path_slices = zip_path.split('/')
-    zip_name = zip_path_slices[-1]
+def convert_initial_zip_to_nonquera_in_path(zip_path, nonquera_dir=None):
+    zip_name = os.path.basename(zip_path)
     challenge_name = '.'.join(zip_name.split('.')[:-1])
-    zip_dir = '/'.join(zip_path_slices[:-1])
-    extract_tmp_path = f'{zip_dir}/.tmp_{challenge_name}'
+    zip_dir = os.path.dirname(zip_path)
+
+    extract_tmp_directory = tempfile.TemporaryDirectory()
+    extract_tmp_path = extract_tmp_directory.name
 
     if not nonquera_dir:
         nonquera_dir = f'{zip_dir}/{challenge_name}_nonquera'
@@ -120,32 +171,42 @@ def convert_initial_zip_to_nonquera(zip_path, nonquera_dir=None):
         zip_obj.extractall(extract_tmp_path)
 
     # convert temporary dir
-    nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_dir_to_nonquera(
+    nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_dir_to_nonquera_in_path(
         initial_dir=extract_tmp_path,
         nonquera_dir=nonquera_dir,
         challenge_name=challenge_name
     )
 
-    # remove temporary dir
-    shutil.rmtree(extract_tmp_path)
-
     return nonquera_extract_dir_path, nonquera_extract_zip_path
 
 
-def convert_initial_to_nonquera(path, mode, nonquera_dir=None):
+def convert_initial_to_nonquera_in_temp_file(path, mode):
+    if mode not in VALID_MODES:
+        raise InvalidMode(f'mode muse be one of {VALID_MODES}')
+
+    temp_file = None
+    if mode == 'dir':
+        temp_file = convert_initial_dir_to_nonquera_in_temp_file(path)
+    elif mode == 'zip':
+        temp_file = convert_initial_zip_to_nonquera_in_temp_file(path)
+
+    return temp_file
+
+
+def convert_initial_to_nonquera_in_path(path, mode, nonquera_dir=None):
     if mode not in VALID_MODES:
         raise InvalidMode(f'mode muse be one of {VALID_MODES}')
 
     nonquera_extract_dir_path, nonquera_extract_zip_path = None, None
 
     if mode == 'dir':
-        nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_dir_to_nonquera(
+        nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_dir_to_nonquera_in_path(
             initial_dir=path,
             nonquera_dir=nonquera_dir,
         )
 
     elif mode == 'zip':
-        nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_zip_to_nonquera(
+        nonquera_extract_dir_path, nonquera_extract_zip_path = convert_initial_zip_to_nonquera_in_path(
             zip_path=path,
             nonquera_dir=nonquera_dir
         )
